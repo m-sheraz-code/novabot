@@ -3,8 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-const openaiKey = process.env.OPENAI_API_KEY || '';
-const geminiKey = process.env.GEMINI_API_KEY || ''; 
+const geminiKey = process.env.GEMINI_API_KEY || ''; // Your Gemini API key
 
 interface DocumentChunk {
   id: string;
@@ -79,10 +78,10 @@ function cosineSimilarity(a: number[], b: number[]): number {
   return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-// ✅ REPLACED WITH GEMINI EMBEDDINGS
+// --------------------- GEMINI EMBEDDINGS ---------------------
 async function generateEmbedding(text: string): Promise<number[]> {
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedText?key=${geminiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/textembedding-gecko-001:embedText?key=${geminiKey}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -98,39 +97,30 @@ async function generateEmbedding(text: string): Promise<number[]> {
   return data.embedding?.value || [];
 }
 
-// (Optional; still using OpenAI)
+// --------------------- GEMINI ANSWER GENERATION ---------------------
 async function generateAnswer(context: string, question: string): Promise<string> {
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${openaiKey}`,
-    },
-    body: JSON.stringify({
-      model: 'gpt-3.5-turbo',
-      messages: [
-        {
-          role: 'system',
-          content: 'You are a helpful assistant that answers questions based on the provided context. If the answer is not in the context, say so politely.',
-        },
-        {
-          role: 'user',
-          content: `Context:\n${context}\n\nQuestion: ${question}\n\nAnswer:`,
-        },
-      ],
-      temperature: 0.7,
-      max_tokens: 500,
-    }),
-  });
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-turbo:generateText?key=${geminiKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt: `Answer the question based on the following context:\nContext:\n${context}\n\nQuestion:\n${question}\n\nAnswer:`,
+        temperature: 0.7,
+        max_output_tokens: 500
+      }),
+    }
+  );
 
   if (!response.ok) {
-    throw new Error(`OpenAI API error: ${response.statusText}`);
+    throw new Error(`Gemini API error (answer generation): ${response.statusText}`);
   }
 
   const data = await response.json();
-  return data.choices[0].message.content;
+  return data.candidates?.[0]?.content || "I'm unable to generate an answer right now.";
 }
 
+// --------------------- MAIN HANDLER ---------------------
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -161,11 +151,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const bm25Scorer = new BM25Scorer();
     const bm25Results = bm25Scorer.score(question, chunks as DocumentChunk[]);
-
     let finalResults = bm25Results.slice(0, 5);
 
     try {
-      // 🔥 Now uses GEMINI
       const queryEmbedding = await generateEmbedding(question);
 
       const vectorResults = chunks
@@ -211,11 +199,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return `Page ${page}`;
     });
 
-    let session = sessionId;
-    if (!session) {
-      session = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    }
-
+    let session = sessionId || `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     let sessionRecord = await supabase
       .from('chat_sessions')
       .select('id')
@@ -250,7 +234,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           bot_id: botId,
           role: 'assistant',
           content: answer,
-          citations: citations,
+          citations,
           response_time_ms: Date.now() - startTime,
         },
       ] as any);
