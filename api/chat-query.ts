@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-const geminiKey = process.env.GEMINI_API_KEY || ''; // Your Gemini API key
+const geminiKey = process.env.GEMINI_API_KEY || '';
 
 interface DocumentChunk {
   id: string;
@@ -78,49 +78,63 @@ function cosineSimilarity(a: number[], b: number[]): number {
   return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-// --------------------- GEMINI EMBEDDINGS ---------------------
+// ========== GEMINI EMBEDDING ==========
 async function generateEmbedding(text: string): Promise<number[]> {
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/textembedding-gecko-001:embedText?key=${geminiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Gemini API error: ${response.statusText}`);
-  }
-
-  const data = await response.json();
-  return data.embedding?.value || [];
-}
-
-// --------------------- GEMINI ANSWER GENERATION ---------------------
-async function generateAnswer(context: string, question: string): Promise<string> {
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-turbo:generateText?key=${geminiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${geminiKey}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        prompt: `Answer the question based on the following context:\nContext:\n${context}\n\nQuestion:\n${question}\n\nAnswer:`,
-        temperature: 0.7,
-        max_output_tokens: 500
+        content: {
+          parts: [
+            { text }
+          ]
+        },
+        // optionally choose output_dimensionality like 768 or 3072
+        // output_dimensionality: 768
       }),
     }
   );
 
   if (!response.ok) {
-    throw new Error(`Gemini API error (answer generation): ${response.statusText}`);
+    const err = await response.text();
+    throw new Error(`Gemini Embedding API error: ${response.statusText} – ${err}`);
   }
 
   const data = await response.json();
-  return data.candidates?.[0]?.content || "I'm unable to generate an answer right now.";
+  // The response structure from Google embedding API has 'embeddings'
+  // According to docs. :contentReference[oaicite:1]{index=1}
+  return data.embeddings?.[0]?.value || [];
 }
 
-// --------------------- MAIN HANDLER ---------------------
+// ========== GEMINI GENERATION ==========
+async function generateAnswer(context: string, question: string): Promise<string> {
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateText?key=${geminiKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt: `Context:\n${context}\n\nQuestion: ${question}\n\nAnswer:`,
+        temperature: 0.7,
+        // max_output_tokens depends on Gemini API limits; choose something reasonable
+        max_output_tokens: 512
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Gemini Generation API error: ${response.statusText} – ${err}`);
+  }
+
+  const data = await response.json();
+  // The Gemini generation API returns `candidates` with `content`. 
+  // The exact field names might vary; check the API response by logging `data`.
+  return data.candidates?.[0]?.content || "No answer generated.";
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -130,7 +144,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const { botId, question, sessionId } = req.body;
-
     if (!botId || !question) {
       return res.status(400).json({ error: 'botId and question are required' });
     }
@@ -157,7 +170,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const queryEmbedding = await generateEmbedding(question);
 
       const vectorResults = chunks
-        .filter((chunk: any) => chunk.embedding)
+        .filter((chunk: any) => Array.isArray(chunk.embedding))
         .map((chunk: any) => ({
           chunk,
           score: cosineSimilarity(queryEmbedding, chunk.embedding),
@@ -170,36 +183,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const bm25Score = (bm25Results.length - index) / bm25Results.length;
         hybridScores.set(result.chunk.id, bm25Score * 0.6);
       });
-
       vectorResults.forEach((result, index) => {
         const vectorScore = (vectorResults.length - index) / vectorResults.length;
         const currentScore = hybridScores.get(result.chunk.id) || 0;
         hybridScores.set(result.chunk.id, currentScore + vectorScore * 0.4);
       });
 
-      const allChunks = [...bm25Results.map(r => r.chunk), ...vectorResults.map(r => r.chunk)];
-      const uniqueChunks = Array.from(new Map(allChunks.map(c => [c.id, c])).values());
-
-      finalResults = uniqueChunks
-        .map(chunk => ({
-          chunk,
-          score: hybridScores.get(chunk.id) || 0,
-        }))
+      const all = [...bm25Results.map(r => r.chunk), ...vectorResults.map(r => r.chunk)];
+      const uniq = Array.from(new Map(all.map(c => [c.id, c])).values());
+      finalResults = uniq
+        .map(chunk => ({ chunk, score: hybridScores.get(chunk.id) || 0 }))
         .sort((a, b) => b.score - a.score)
         .slice(0, 5);
-    } catch (error) {
-      console.error('Vector search failed, using BM25 only:', error);
+    } catch (err) {
+      console.error('Vector search failed, using BM25 only:', err);
     }
 
     const context = finalResults.map(r => r.chunk.content).join('\n\n');
     const answer = await generateAnswer(context, question);
 
     const citations = finalResults.map(r => {
-      const page = r.chunk.metadata?.page || 1;
+      const page = r.chunk.metadata?.page ?? 1;
       return `Page ${page}`;
     });
 
-    let session = sessionId || `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    let session = sessionId;
+    if (!session) {
+      session = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    }
+
     let sessionRecord = await supabase
       .from('chat_sessions')
       .select('id')
@@ -222,43 +234,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (sessionRecord.data) {
       await supabase.from('chat_messages').insert([
-        {
-          session_id: sessionRecord.data.id,
-          bot_id: botId,
-          role: 'user',
-          content: question,
-          response_time_ms: 0,
-        },
-        {
-          session_id: sessionRecord.data.id,
-          bot_id: botId,
-          role: 'assistant',
-          content: answer,
-          citations,
-          response_time_ms: Date.now() - startTime,
-        },
+        { session_id: sessionRecord.data.id, bot_id: botId, role: 'user', content: question, response_time_ms: 0 },
+        { session_id: sessionRecord.data.id, bot_id: botId, role: 'assistant', content: answer, citations, response_time_ms: Date.now() - startTime },
       ] as any);
-
       await supabase
         .from('chat_sessions')
         .update({ last_active_at: new Date().toISOString() })
         .eq('id', sessionRecord.data.id);
     }
 
-    return res.status(200).json({
-      answer,
-      citations,
-      responseTime: Date.now() - startTime,
-    });
+    return res.status(200).json({ answer, citations, responseTime: Date.now() - startTime });
   } catch (error: any) {
-    console.error('Query error details:', {
-      message: error.message,
-      stack: error.stack,
-      name: error.name,
-    });
+    console.error('Query error details:', { message: error.message, stack: error.stack });
     return res.status(500).json({
-      error: error.message || 'Failed to process query',
-      answer: 'I apologize, but I encountered an error processing your question. Please try again.',
+      error: error.message,
+      answer: 'Sorry, something went wrong. Please try again.',
     });
   }
 }
