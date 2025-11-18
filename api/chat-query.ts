@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const openaiKey = process.env.OPENAI_API_KEY || '';
+const geminiKey = process.env.GEMINI_API_KEY || ''; 
 
 interface DocumentChunk {
   id: string;
@@ -78,27 +79,26 @@ function cosineSimilarity(a: number[], b: number[]): number {
   return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
+// ✅ REPLACED WITH GEMINI EMBEDDINGS
 async function generateEmbedding(text: string): Promise<number[]> {
-  const response = await fetch('https://api.openai.com/v1/embeddings', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${openaiKey}`,
-    },
-    body: JSON.stringify({
-      model: 'text-embedding-ada-002',
-      input: text,
-    }),
-  });
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedText?key=${geminiKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    }
+  );
 
   if (!response.ok) {
-    throw new Error(`OpenAI API error: ${response.statusText}`);
+    throw new Error(`Gemini API error: ${response.statusText}`);
   }
 
   const data = await response.json();
-  return data.data[0].embedding;
+  return data.embedding?.value || [];
 }
 
+// (Optional; still using OpenAI)
 async function generateAnswer(context: string, question: string): Promise<string> {
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -165,6 +165,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let finalResults = bm25Results.slice(0, 5);
 
     try {
+      // 🔥 Now uses GEMINI
       const queryEmbedding = await generateEmbedding(question);
 
       const vectorResults = chunks
@@ -266,11 +267,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       responseTime: Date.now() - startTime,
     });
   } catch (error: any) {
-      console.error('Query error details:', {
-        message: error.message,
-        stack: error.stack,
-        name: error.name,
-      });
+    console.error('Query error details:', {
+      message: error.message,
+      stack: error.stack,
+      name: error.name,
+    });
     return res.status(500).json({
       error: error.message || 'Failed to process query',
       answer: 'I apologize, but I encountered an error processing your question. Please try again.',
