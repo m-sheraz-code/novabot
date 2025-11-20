@@ -80,59 +80,90 @@ function cosineSimilarity(a: number[], b: number[]): number {
 
 // ========== GEMINI EMBEDDING ==========
 async function generateEmbedding(text: string): Promise<number[]> {
+  if (!geminiKey) {
+    throw new Error('GEMINI_API_KEY is not configured. Please set it in your environment variables.');
+  }
+
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${geminiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${geminiKey}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        model: "models/text-embedding-004",
         content: {
           parts: [
             { text }
           ]
         },
-        // optionally choose output_dimensionality like 768 or 3072
-        // output_dimensionality: 768
       }),
     }
   );
 
   if (!response.ok) {
     const err = await response.text();
-    throw new Error(`Gemini Embedding API error: ${response.statusText} – ${err}`);
+    const errorMessage = `Gemini Embedding API error: ${response.statusText} – ${err}`;
+
+    // Check if it's an API key issue
+    if (err.includes('API_KEY_INVALID') || err.includes('API key expired')) {
+      throw new Error('Your Gemini API key has expired or is invalid. Please update the GEMINI_API_KEY environment variable with a new key from https://aistudio.google.com/app/apikey');
+    }
+
+    throw new Error(errorMessage);
   }
 
   const data = await response.json();
-  // The response structure from Google embedding API has 'embeddings'
-  // According to docs. :contentReference[oaicite:1]{index=1}
-  return data.embeddings?.[0]?.value || [];
+  // The response structure has 'embedding.values'
+  return data.embedding?.values || [];
 }
 
 // ========== GEMINI GENERATION ==========
 async function generateAnswer(context: string, question: string): Promise<string> {
+  if (!geminiKey) {
+    throw new Error('GEMINI_API_KEY is not configured. Please set it in your environment variables.');
+  }
+
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-turbo:generateText?key=${geminiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${geminiKey}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        prompt: `Context:\n${context}\n\nQuestion: ${question}\n\nAnswer:`,
-        temperature: 0.7,
-        // max_output_tokens depends on Gemini API limits; choose something reasonable
-        max_output_tokens: 512
+        contents: [{
+          parts: [{
+            text: `You are a helpful AI assistant. Answer the question based on the provided context.
+
+Context:
+${context}
+
+Question: ${question}
+
+Provide a clear and concise answer based only on the context provided. If the context doesn't contain enough information to answer the question, say so.`
+          }]
+        }],
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 512,
+        }
       }),
     }
   );
 
   if (!response.ok) {
     const err = await response.text();
-    throw new Error(`Gemini Generation API error: ${response.statusText} – ${err}`);
+    const errorMessage = `Gemini Generation API error: ${response.statusText} – ${err}`;
+
+    // Check if it's an API key issue
+    if (err.includes('API_KEY_INVALID') || err.includes('API key expired')) {
+      throw new Error('Your Gemini API key has expired or is invalid. Please update the GEMINI_API_KEY environment variable with a new key from https://aistudio.google.com/app/apikey');
+    }
+
+    throw new Error(errorMessage);
   }
 
   const data = await response.json();
-  // The Gemini generation API returns `candidates` with `content`. 
-  // The exact field names might vary; check the API response by logging `data`.
-  return data.candidates?.[0]?.content || "No answer generated.";
+  // The Gemini API returns candidates with content.parts[0].text
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || "No answer generated.";
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
