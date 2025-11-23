@@ -123,34 +123,41 @@ async function generateAnswer(context: string, question: string): Promise<string
     throw new Error('GEMINI_API_KEY is not configured. Please set it in your environment variables.');
   }
 
+  // Clean up context to avoid formatting issues
+  const cleanContext = context.replace(/\r\n/g, '\n').trim();
+  const cleanQuestion = question.replace(/\r\n/g, '\n').trim();
+
+  const requestBody = {
+    contents: [{
+      parts: [{
+        text: `You are a helpful AI assistant. Answer the question based on the provided context.
+
+Context:
+${cleanContext}
+
+Question: ${cleanQuestion}
+
+Provide a clear and concise answer based only on the context provided. If the context doesn't contain enough information to answer the question, say so.`
+      }]
+    }],
+    generationConfig: {
+      temperature: 0.7,
+      maxOutputTokens: 512,
+    }
+  };
+
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${geminiKey}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{
-          parts: [{
-            text: `You are a helpful AI assistant. Answer the question based on the provided context.
-
-Context:
-${context}
-
-Question: ${question}
-
-Provide a clear and concise answer based only on the context provided. If the context doesn't contain enough information to answer the question, say so.`
-          }]
-        }],
-        generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 512,
-        }
-      }),
+      body: JSON.stringify(requestBody),
     }
   );
 
   if (!response.ok) {
     const err = await response.text();
+    console.error('Gemini API Error Response:', err);
     const errorMessage = `Gemini Generation API error: ${response.statusText} – ${err}`;
 
     // Check if it's an API key issue
@@ -162,6 +169,7 @@ Provide a clear and concise answer based only on the context provided. If the co
   }
 
   const data = await response.json();
+
   // The Gemini API returns candidates with content.parts[0].text
   return data.candidates?.[0]?.content?.parts?.[0]?.text || "No answer generated.";
 }
