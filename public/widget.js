@@ -319,12 +319,6 @@
           <div class="chatbot-widget-message ${msg.role}">
             <div class="chatbot-widget-message-content">
               ${msg.content}
-              ${msg.citations && msg.citations.length > 0 ? `
-                <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(0,0,0,0.1);">
-                  <p style="font-size: 12px; opacity: 0.8;">Sources:</p>
-                  ${msg.citations.map(c => `<p style="font-size: 12px; opacity: 0.7;">• ${c}</p>`).join('')}
-                </div>
-              ` : ''}
             </div>
           </div>
         `).join('');
