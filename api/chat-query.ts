@@ -197,8 +197,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (chunksError || !chunks || chunks.length === 0) {
       return res.status(200).json({
-        answer: "I don't have any info to answer from yet. Please upload some documents first.",
-        citations: [],
+        answer: "I don't have any info to answer from yet. Please upload some documents first."
       });
     }
 
@@ -259,12 +258,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // ========== GENERATE ANSWER ==========
     const answer = await generateAnswer(context, question);
 
-    // ========== CITATIONS ==========
-    const citations = finalResults.map(r => {
-      const page = r.chunk.metadata?.page ?? 1;
-      return `Page ${page}`;
-    });
-
     // ========== SESSION HANDLING (SAFE) ==========
     let session = sessionId || `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
@@ -307,7 +300,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         bot_id: botId,
         role: 'assistant',
         content: answer,
-        citations,
         response_time_ms: Date.now() - startTime
       }
     ]);
@@ -320,7 +312,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(200).json({
       answer,
-      citations,
       responseTime: Date.now() - startTime
     });
 
