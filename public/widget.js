@@ -325,6 +325,7 @@
         container.scrollTop = container.scrollHeight;
       }
 
+
       function showLoading() {
         const container = document.getElementById('chatbot-messages');
         const loadingDiv = document.createElement('div');
