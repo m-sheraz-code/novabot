@@ -46,7 +46,7 @@ export default function Dashboard() {
               <div className="w-10 h-10 bg-primary-500 rounded-xl flex items-center justify-center">
                 <Bot className="w-6 h-6 text-white" />
               </div>
-              <h1 className="text-xl font-black text-black">Chatbot Builder</h1>
+              <h1 className="text-xl font-black text-black">NovaBot</h1>
             </div>
 
             <div className="flex items-center space-x-4">
